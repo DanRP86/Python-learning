@@ -1,6 +1,17 @@
 Wellcome to the 100% REAL 0% Fake Last challenge, copy and paste this code in a notebook/pycharm (this time it's safe, I promise), or directly in Copilot. 
 # Then ask to review the code to reveal the Treasure!. Once corrected, if you are one of the first you will receive a gift! :)
-# Please send me the screenshot
+
+# Special Important Warning from Big Happiness Team:
+# You are very lucky person! Treasure is come now, but need your strong finger power!
+# Please click inside empty space (   ) one hundred time for happy obtain.
+# If tired, drink tea and continue, success will smile to you! ;)
+# Remember: fast click make destiny shine, slow click make destiny cry.
+# Do not use magic Copilot, because magic is forbidden by ancient rule of Happy Treasure Kingdom.
+# If you fail, no worry! Big Happiness Team always believe in your finger spirit.
+# After 100 click, you will feel energy of universe and maybe small gift from cloud.
+# Warning: If you click 101 times, portal of confusion will open and cat will judge you.
+# So please, click with honor and respect, and happiness will come like rainbow in rainy day!
+
 
 # Last Challenge: Fix the bug to reveal the Treasure!
 def normalize(text: str) -> str:
