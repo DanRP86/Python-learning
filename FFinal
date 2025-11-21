@@ -1,0 +1,42 @@
+Wellcome to the 100% REAL 0% Fake Last challenge, copy and paste this code in a notebook/pycharm (this time it's safe, I promise), or directly in Copilot. 
+# Then ask to review the code to reveal the Treasure!. Once corrected, if you are one of the first you will receive a gift! :)
+# Please send me the screenshot
+
+# Last Challenge: Fix the bug to reveal the Treasure!
+def normalize(text: str) -> str:
+    """
+    Normalize whitespace and case, then add a friendly message.
+    Expected: "Treasure unlocked" when input contains "unlock".
+    """
+    cleaned = " ".join(text.split()).lower()
+    # Bug: overly strict condition
+    if "unlock" in cleaned and cleaned.endswith("!"):  # <- needs improvement
+        return "Treasure unlocked"
+    return "keep going..."
+
+# Obfuscated treasure (ASCII codes)
+_encoded = [
+    89,111,117,32,104,97,118,101,32,121,111,117,114,32,116,114,101,97,115,117,114,101,33,32,67,108,105,99,107,32,104,101,114,101,32,40,32,32,32,41,32,49,48,48,32,116,105,109,101,115,32,116,111,32,111,98,116,97,105,110,32,105,116,32,59,41
+]
+
+def reveal_treasure():
+    # Decode ASCII list into string
+    return ''.join(chr(n) for n in _encoded)
+
+if __name__ == "__main__":
+    # Intentional typo: variable name mismatch
+    usr_inpt = input("Type 'unlock' followed by any text: ")
+    print(normalize(usr_input))  # <- should be usr_inpt
+
+    # Only reveal treasure if condition passes (after bug fix)
+    if "unlock" in usr_inpt.lower():
+        print("🎁 Treasure:", reveal_treasure())
+
+# =========================
+# FFinal (Fake Ending) ;)
+# =========================
+def fake_final():
+    print("You have your treasure! Click here (   ) 100 times to obtain it ;)")
+
+# Ejecuta el Fake Final si alguien lo llama explícitamente
+fake_final()
