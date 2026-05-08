@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useMemo, useEffect } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { EffectComposer, Bloom, Vignette } from "@react-three/postprocessing";
 import * as THREE from "three";
@@ -14,10 +14,35 @@ type IntroFlowFieldProps = {
   };
 };
 
+type OrderedSheetProps = {
+  progress: number;
+  anchors: NonNullable<IntroFlowFieldProps["anchors"]>;
+  position?: [number, number, number];
+  rotation?: [number, number, number];
+  scale?: [number, number, number];
+  cols?: number;
+  rows?: number;
+  width?: number;
+  height?: number;
+  layer?: number;
+  opacity?: number;
+  pointScale?: number;
+  flowStrength?: number;
+  structureStrength?: number;
+  waveIntensity?: number;
+};
+
 const vertexShader = `
 uniform float uTime;
-uniform vec2 uMouse;
+uniform float uProgress;
 uniform float uLayer;
+uniform float uOpacity;
+uniform float uPointScale;
+uniform float uFlowStrength;
+uniform float uStructureStrength;
+uniform float uWaveIntensity;
+
+uniform vec2 uMouse;
 
 uniform vec2 uTitle;
 uniform float uTitleStrength;
@@ -28,14 +53,21 @@ uniform float uP3Strength;
 
 attribute float aRandom;
 attribute float aBand;
+attribute float aGridU;
+attribute float aGridV;
 
-varying float vElevation;
 varying float vCrest;
 varying float vRandom;
 varying float vBand;
-varying float vTitleMask;
+varying float vMask;
+varying float vDepth;
+varying float vGridU;
+varying float vGridV;
+varying float vOpacity;
 
-// --- FUNCIONES DE RUIDO BASE ---
+// -----------------------------
+// Simplex noise
+// -----------------------------
 vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
 vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
 vec4 permute(vec4 x) { return mod289(((x * 34.0) + 1.0) * x); }
@@ -58,6 +90,7 @@ float snoise(vec3 v) {
   vec3 x3 = x0 - D.yyy;
 
   i = mod289(i);
+
   vec4 p = permute(
     permute(
       permute(i.z + vec4(0.0, i1.z, i2.z, 1.0))
@@ -92,51 +125,44 @@ float snoise(vec3 v) {
   vec3 p2 = vec3(a1.xy, h.z);
   vec3 p3 = vec3(a1.zw, h.w);
 
-  vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));
+  vec4 norm = taylorInvSqrt(vec4(
+    dot(p0, p0),
+    dot(p1, p1),
+    dot(p2, p2),
+    dot(p3, p3)
+  ));
+
   p0 *= norm.x;
   p1 *= norm.y;
   p2 *= norm.z;
   p3 *= norm.w;
 
-  vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);
+  vec4 m = max(
+    0.6 - vec4(
+      dot(x0, x0),
+      dot(x1, x1),
+      dot(x2, x2),
+      dot(x3, x3)
+    ),
+    0.0
+  );
+
   m = m * m;
 
   return 42.0 * dot(
     m * m,
-    vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3))
+    vec4(
+      dot(p0, x0),
+      dot(p1, x1),
+      dot(p2, x2),
+      dot(p3, x3)
+    )
   );
 }
 
-// --- MAGIA: CURL NOISE ---
-vec3 snoiseVec3( vec3 x ){
-  float s  = snoise(vec3( x ));
-  float s1 = snoise(vec3( x.y - 19.1 , x.z + 33.4 , x.x + 47.2 ));
-  float s2 = snoise(vec3( x.z + 74.2 , x.x - 124.5 , x.y + 99.4 ));
-  vec3 c = vec3( s , s1 , s2 );
-  return c;
-}
-
-vec3 curlNoise( vec3 p ){
-  const float e = .1;
-  vec3 dx = vec3( e   , 0.0 , 0.0 );
-  vec3 dy = vec3( 0.0 , e   , 0.0 );
-  vec3 dz = vec3( 0.0 , 0.0 , e   );
-
-  vec3 p_x0 = snoiseVec3( p - dx );
-  vec3 p_x1 = snoiseVec3( p + dx );
-  vec3 p_y0 = snoiseVec3( p - dy );
-  vec3 p_y1 = snoiseVec3( p + dy );
-  vec3 p_z0 = snoiseVec3( p - dz );
-  vec3 p_z1 = snoiseVec3( p + dz );
-
-  float x = p_y1.z - p_y0.z - p_z1.y + p_z0.y;
-  float y = p_z1.x - p_z0.x - p_x1.z + p_x0.z;
-  float z = p_x1.y - p_x0.y - p_y1.x + p_y0.x;
-
-  const float divisor = 1.0 / ( 2.0 * e );
-  return normalize( vec3( x , y , z ) * divisor );
-}
-
+// -----------------------------
+// Text field mask
+// -----------------------------
 float getPushField(vec2 pos, vec2 anchor, float width, float height) {
   vec2 delta = pos - anchor;
   vec2 norm = vec2(delta.x / width, delta.y / height);
@@ -145,364 +171,490 @@ float getPushField(vec2 pos, vec2 anchor, float width, float height) {
 }
 
 void main() {
+  vec3 original = position;
   vec3 pos = position;
-  float band = aBand;
 
-  vec3 curlPos = vec3(pos.x * 0.08, pos.y * 0.08, uTime * 0.05);
-  vec3 curl = curlNoise(curlPos);
+  float u = aGridU;
+  float v = aGridV;
 
-  float current = sin(pos.y * 0.28 + uTime * 0.22) * 0.9;
-  
-  // Modificaciones tuyas mantenidas
-  pos.x += curl.x * (1.8 + band * 1.5) + current * (0.35 + band * 0.95);
-  pos.y += curl.y * (1.5 + band * 1.2);
+  // ------------------------------------------------------
+  // Ordered membrane: mostly Z deformation, little XY drift
+  // ------------------------------------------------------
+  float slowTime = uTime * 0.18;
 
-  float mainWave = sin(pos.x * 0.34 - uTime * 1.35 + aRandom * 6.2831) * (0.35 + band * 1.85);
-  float crossWave = sin(pos.y * 0.46 + uTime * 0.92 + aRandom * 4.0) * (0.12 + band * 0.38);
-  float detailWave = snoise(vec3(pos.x * 0.22, pos.y * 0.16, uTime * 0.22)) * (0.18 + band * 0.45);
+  float waveA = sin(pos.x * 0.34 + slowTime * 1.4 + uLayer * 2.0) * 1.55;
+  float waveB = sin(pos.y * 0.42 - slowTime * 1.1 + aRandom * 1.2) * 1.05;
+  float waveC = sin((pos.x + pos.y) * 0.18 + slowTime * 1.7) * 1.35;
 
-  float crest = mainWave + crossWave + detailWave + (curl.z * 0.5);
-  // Tu ajuste de altura de ola
-  pos.z += crest * 2.0;
+  float lowNoise = snoise(vec3(pos.x * 0.055, pos.y * 0.055, slowTime * 0.7)) * 2.2;
+  float detail = snoise(vec3(pos.x * 0.16, pos.y * 0.13, slowTime * 1.1)) * 0.38;
 
-  // Ratón
-  vec2 delta = pos.xy - uMouse;
-  float distMouse = length(delta);
-  float radius = 1.0;
-  float force = 1.0 - smoothstep(0.0, radius, distMouse);
-  vec2 dir = normalize(delta + vec2(0.0001, 0.0001));
-  vec2 tangent = vec2(-dir.y, dir.x);
+  // Ridge creates those textile-like folds
+  float ridgeLine = sin(pos.x * 0.22 + pos.y * 0.16 + slowTime * 1.4);
+  float ridge = smoothstep(0.30, 1.0, ridgeLine);
 
-  pos.xy += dir * force * (0.18 + band * 0.65);
-  pos.xy += tangent * force * 0.15;
-  pos.z -= force * 0.15;
+  float surface = (waveA + waveB + waveC + lowNoise + detail) * uWaveIntensity;
+  surface += ridge * 1.65 * uWaveIntensity;
 
-  // Campos de texto (con tus ajustes perfectos)
-  float pushTitle = getPushField(pos.xy, uTitle, 35.0, 3.2);
-  float pushP2 = getPushField(pos.xy, uP2, 15.0, 2.0); 
+  pos.z += surface;
+
+  // Very controlled lateral motion to keep grid readable
+  float driftX = snoise(vec3(pos.x * 0.045, pos.y * 0.060, uTime * 0.05));
+  float driftY = snoise(vec3(pos.y * 0.045, pos.x * 0.060, uTime * 0.05 + 20.0));
+
+  pos.x += driftX * uFlowStrength;
+  pos.y += driftY * uFlowStrength * 0.65;
+
+  // Keep ordered structure visible
+  vec3 structured = original + vec3(0.0, 0.0, surface);
+  pos = mix(pos, structured, uStructureStrength);
+
+  // ------------------------------------------------------
+  // Mouse interaction — subtle surface disturbance
+  // ------------------------------------------------------
+  vec2 mouseDelta = pos.xy - uMouse;
+  float mouseDist = length(mouseDelta);
+  float mouseForce = 1.0 - smoothstep(0.0, 1.2, mouseDist);
+  vec2 mouseDir = normalize(mouseDelta + vec2(0.0001));
+
+  pos.xy += mouseDir * mouseForce * 0.12;
+  pos.z -= mouseForce * 0.28;
+
+  // ------------------------------------------------------
+  // Text repulsion — depress/open the surface, do not explode it
+  // ------------------------------------------------------
+  float pushTitle = getPushField(pos.xy, uTitle, 11.5, 3.2);
+  float pushP2 = getPushField(pos.xy, uP2, 9.0, 2.2);
   float pushP3 = getPushField(pos.xy, uP3, 7.0, 1.8);
 
-  float maskTitle = clamp(pushTitle * (uTitleStrength / 3.8), 0.0, 1.0);
-  float maskP2 = clamp(pushP2 * (uP2Strength / 2.0), 0.0, 1.0);
-  float maskP3 = clamp(pushP3 * (uP3Strength / 1.5), 0.0, 1.0);
-  
+  float maskTitle = clamp(pushTitle * uTitleStrength, 0.0, 1.0);
+  float maskP2 = clamp(pushP2 * uP2Strength, 0.0, 1.0);
+  float maskP3 = clamp(pushP3 * uP3Strength, 0.0, 1.0);
+
   float totalMask = max(maskTitle, max(maskP2, maskP3));
 
-  vec2 dirTitle = normalize((pos.xy - uTitle) + vec2(0.0001, 0.0001));
-  vec2 dirP2 = normalize((pos.xy - uP2) + vec2(0.0001, 0.0001));
-  vec2 dirP3 = normalize((pos.xy - uP3) + vec2(0.0001, 0.0001));
+  vec2 titleDir = normalize((pos.xy - uTitle) + vec2(0.0001));
+  vec2 p2Dir = normalize((pos.xy - uP2) + vec2(0.0001));
+  vec2 p3Dir = normalize((pos.xy - uP3) + vec2(0.0001));
 
-  pos.x += dirTitle.x * pushTitle * uTitleStrength * (1.8 + band * 0.6) +
-           dirP2.x * pushP2 * uP2Strength * (1.8 + band * 0.6) +
-           dirP3.x * pushP3 * uP3Strength * (1.8 + band * 0.6);
+  // Minimal lateral opening
+  pos.xy += titleDir * maskTitle * 0.42;
+  pos.xy += p2Dir * maskP2 * 0.34;
+  pos.xy += p3Dir * maskP3 * 0.30;
 
-  float totalYPush = pushTitle * uTitleStrength + pushP2 * uP2Strength + pushP3 * uP3Strength;
-  pos.y -= totalYPush * 0.34;
-  pos.z -= totalYPush * (2.0 + band * 0.8);
+  // Main effect: surface depression around text
+  pos.z -= totalMask * (2.4 + uLayer * 0.8);
 
-  vElevation = pos.z;
-  vCrest = clamp((crest + 2.5) / 5.0, 0.0, 1.0);
+  // ------------------------------------------------------
+  // Varyings
+  // ------------------------------------------------------
+  float crest = clamp((surface + 4.0) / 8.0, 0.0, 1.0);
+  crest = max(crest, ridge * 0.85);
+
+  vCrest = crest;
   vRandom = aRandom;
-  vBand = band;
-  vTitleMask = clamp(totalMask, 0.0, 1.0);
+  vBand = aBand;
+  vMask = totalMask;
+  vGridU = u;
+  vGridV = v;
+  vOpacity = uOpacity;
 
   vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
 
-  float baseSize = mix(3.4, 6.8, aRandom) + band * 3.2;
-  float layerScale = mix(1.0, 0.72, uLayer);
-  float sizeMask = max(0.12, 1.0 - totalMask * 0.78);
+  vDepth = clamp((-mvPosition.z - 6.0) / 18.0, 0.0, 1.0);
 
-  gl_PointSize = baseSize * layerScale * sizeMask * (15.0 / -mvPosition.z);
+  // Larger points in foreground, smaller in depth
+  float baseSize = mix(1.6, 3.4, aRandom);
+  float crestBoost = 1.0 + smoothstep(0.66, 1.0, crest) * 0.85;
+  float depthScale = 18.0 / -mvPosition.z;
+  float maskSize = max(0.15, 1.0 - totalMask * 0.70);
+
+  gl_PointSize = baseSize * uPointScale * crestBoost * depthScale * maskSize;
   gl_Position = projectionMatrix * mvPosition;
 }
 `;
 
-const baseFragmentShader = `
-varying float vElevation;
+const fragmentShader = `
 varying float vCrest;
 varying float vRandom;
 varying float vBand;
-varying float vTitleMask;
+varying float vMask;
+varying float vDepth;
+varying float vGridU;
+varying float vGridV;
+varying float vOpacity;
 
 void main() {
   vec2 uv = gl_PointCoord.xy - vec2(0.5);
   float r = length(uv);
+
   if (r > 0.5) discard;
 
-  float soft = 1.0 - smoothstep(0.18, 0.5, r);
-  float core = 1.0 - smoothstep(0.0, 0.22, r);
+  float core = 1.0 - smoothstep(0.0, 0.18, r);
+  float soft = 1.0 - smoothstep(0.16, 0.5, r);
+  float rim = smoothstep(0.44, 0.12, r);
 
-  vec3 c1 = vec3(0.004, 0.012, 0.028);
-  vec3 c2 = vec3(0.020, 0.050, 0.110);
-  vec3 c3 = vec3(0.095, 0.170, 0.285);
-  vec3 c4 = vec3(0.290, 0.480, 0.620);
-  vec3 c5 = vec3(0.820, 0.930, 0.980);
+  vec3 deep = vec3(0.010, 0.018, 0.040);
+  vec3 blueSilver = vec3(0.46, 0.58, 0.72);
+  vec3 silver = vec3(0.78, 0.86, 0.94);
+  vec3 white = vec3(0.96, 0.985, 1.0);
 
-  float seaMix = clamp(vBand * 0.72 + vCrest * 0.38 + vElevation * 0.05, 0.0, 1.0);
+  float crestLight = smoothstep(0.58, 1.0, vCrest);
+  float rarity = smoothstep(0.55, 0.98, vRandom);
 
-  vec3 color = mix(c1, c2, seaMix);
-  color = mix(color, c3, smoothstep(0.28, 0.68, seaMix));
-  color = mix(color, c4, smoothstep(0.62, 0.92, seaMix) * 0.55);
+  // Subtle diagonal shimmer, helps the ordered grid feel premium
+  float diagonal = smoothstep(0.12, 1.0, vGridU * 0.55 + vGridV * 0.45);
+  float sheen = crestLight * (0.55 + diagonal * 0.45);
 
-  float crestLight = smoothstep(0.72, 1.0, vCrest);
-  float glassEdge = smoothstep(0.48, 0.08, r);
-  float glassSheet = smoothstep(0.58, 1.0, vCrest) * (0.35 + 0.65 * vBand);
+  vec3 color = mix(deep, blueSilver, 0.42 + sheen * 0.36);
+  color = mix(color, silver, crestLight * 0.48);
+  color = mix(color, white, core * crestLight * rarity * 0.58);
 
-  color += c5 * crestLight * 0.18;
-  color += c4 * core * 0.12;
-  color += vec3(0.72, 0.88, 0.98) * glassEdge * glassSheet * 0.12;
-  color += vec3(0.40, 0.62, 0.78) * soft * glassSheet * 0.05;
+  color += white * rim * crestLight * 0.10;
 
-  float alpha = soft * (0.34 + vBand * 0.66) * (0.98 + vCrest * 0.82);
-  alpha *= (1.0 - vTitleMask * 0.9);
+  float alpha = soft * (0.22 + vBand * 0.30 + crestLight * 0.52);
+  alpha += core * crestLight * rarity * 0.20;
 
-  gl_FragColor = vec4(color, alpha * 1.38);
+  // Fade in depth slightly
+  alpha *= mix(1.0, 0.58, vDepth);
+
+  // Text holes
+  alpha *= (1.0 - vMask * 0.88);
+
+  gl_FragColor = vec4(color, alpha * vOpacity);
 }
 `;
 
-const glintFragmentShader = `
-varying float vElevation;
-varying float vCrest;
-varying float vRandom;
-varying float vBand;
-varying float vTitleMask;
-
-void main() {
-  vec2 uv = gl_PointCoord.xy - vec2(0.5);
-  float r = length(uv);
-  if (r > 0.5) discard;
-
-  float spark = 1.0 - smoothstep(0.0, 0.18, r);
-  float halo = 1.0 - smoothstep(0.05, 0.38, r);
-
-  float crestMask = smoothstep(0.78, 1.0, vCrest);
-  float bandMask = smoothstep(0.28, 0.95, vBand);
-  float rarity = smoothstep(0.52, 0.96, vRandom);
-
-  float alpha = crestMask * bandMask * rarity * (spark * 0.95 + halo * 0.18) * 0.55;
-  alpha *= (1.0 - vTitleMask);
-
-  vec3 color = mix(vec3(0.50, 0.72, 0.88), vec3(0.95, 0.99, 1.0), crestMask);
-  gl_FragColor = vec4(color, alpha);
+function clamp01(v: number) {
+  return Math.min(1, Math.max(0, v));
 }
-`;
 
-const mistFragmentShader = `
-varying float vElevation;
-varying float vCrest;
-varying float vRandom;
-varying float vBand;
-varying float vTitleMask;
-
-void main() {
-  vec2 uv = gl_PointCoord.xy - vec2(0.5);
-  float r = length(uv);
-  if (r > 0.5) discard;
-
-  float soft = 1.0 - smoothstep(0.10, 0.5, r);
-  float noiseMask = smoothstep(0.15, 0.95, vRandom) * smoothstep(0.15, 0.85, vBand);
-  float crestMask = smoothstep(0.35, 0.95, vCrest);
-
-  vec3 color = vec3(0.26, 0.38, 0.52);
-  float alpha = soft * noiseMask * crestMask * 0.05;
-  alpha *= (1.0 - vTitleMask * 0.95);
-
-  gl_FragColor = vec4(color, alpha);
+function range(value: number, start: number, end: number) {
+  if (end <= start) return value >= end ? 1 : 0;
+  return clamp01((value - start) / (end - start));
 }
-`;
 
-function SeaParticles({
-  progress = 0,
-  anchors = {
-    title: { x: 0.5, y: 0.28 },
-    p2: { x: 0.5, y: 0.50 },
-    p3: { x: 0.5, y: 0.70 }
-  },
-}: IntroFlowFieldProps) {
-  const baseMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
-  const glintMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
-  const mistMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
+function createGridGeometry(cols: number, rows: number, width: number, height: number) {
+  const count = cols * rows;
 
-  const invisiblePlane = useMemo(
-    () => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
-    []
-  );
-  
-  // Nuevo: Un Raycaster dedicado exclusivamente a buscar las coordenadas de los textos
-  const textRaycaster = useMemo(() => new THREE.Raycaster(), []);
-  const tempVec3 = useMemo(() => new THREE.Vector3(), []);
+  const positions = new Float32Array(count * 3);
+  const randoms = new Float32Array(count);
+  const bands = new Float32Array(count);
+  const gridU = new Float32Array(count);
+  const gridV = new Float32Array(count);
 
-  const rayTarget = useMemo(() => new THREE.Vector3(), []);
-  const targetMouse = useMemo(() => new THREE.Vector2(1000, 1000), []);
-  const smoothMouse = useMemo(() => new THREE.Vector2(1000, 1000), []);
-  
-  const titleWorld = useMemo(() => new THREE.Vector2(0, 0), []);
-  const p2World = useMemo(() => new THREE.Vector2(0, 0), []);
-  const p3World = useMemo(() => new THREE.Vector2(0, 0), []);
+  let i = 0;
+  let i3 = 0;
 
-  const hasMovedMouse = useRef(false);
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const u = x / (cols - 1);
+      const v = y / (rows - 1);
 
-  useEffect(() => {
-    const handlePointerMove = () => {
-      hasMovedMouse.current = true;
-    };
+      // Ordered grid with tiny micro-jitter to avoid perfect CG stiffness.
+      // Keep this very small: reference depends on visible order.
+      const jitter = 0.018;
+      const jx = (Math.random() - 0.5) * jitter;
+      const jy = (Math.random() - 0.5) * jitter;
 
-    window.addEventListener("pointermove", handlePointerMove, { once: true });
-    return () => window.removeEventListener("pointermove", handlePointerMove);
-  }, []);
-
-  const geometry = useMemo(() => {
-    const geo = new THREE.BufferGeometry();
-    const count = 60000;
-
-    const positions = new Float32Array(count * 3);
-    const randoms = new Float32Array(count);
-    const bands = new Float32Array(count);
-
-    const seaBaseY = -6;
-    const seaHeight = 12;
-
-    for (let i = 0; i < count; i++) {
-      const x = (Math.random() - 0.5) * 34;
-
-      const yBias = Math.pow(Math.random(), 1.9);
-      const y = seaBaseY + yBias * seaHeight;
-      const band = THREE.MathUtils.clamp(1 - (y - seaBaseY) / seaHeight, 0, 1);
-
-      const z = (Math.random() - 0.5) * (0.8 + band * 1.8);
-
-      positions[i * 3] = x;
-      positions[i * 3 + 1] = y;
-      positions[i * 3 + 2] = z;
+      positions[i3 + 0] = (u - 0.5 + jx) * width;
+      positions[i3 + 1] = (v - 0.5 + jy) * height;
+      positions[i3 + 2] = 0;
 
       randoms[i] = Math.random();
-      bands[i] = band;
+
+      // Stronger presence toward lower/foreground bands
+      bands[i] = Math.pow(v, 1.25);
+
+      gridU[i] = u;
+      gridV[i] = v;
+
+      i++;
+      i3 += 3;
     }
+  }
 
-    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    geo.setAttribute("aRandom", new THREE.BufferAttribute(randoms, 1));
-    geo.setAttribute("aBand", new THREE.BufferAttribute(bands, 1));
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute("aRandom", new THREE.BufferAttribute(randoms, 1));
+  geometry.setAttribute("aBand", new THREE.BufferAttribute(bands, 1));
+  geometry.setAttribute("aGridU", new THREE.BufferAttribute(gridU, 1));
+  geometry.setAttribute("aGridV", new THREE.BufferAttribute(gridV, 1));
 
-    return geo;
-  }, []);
+  return geometry;
+}
 
-  useFrame((state) => {
-    const time = state.clock.elapsedTime;
+function CameraRig() {
+  const { camera } = useThree();
 
-    // --- MAGIA DEL PARALLAX (EL DESCENSO) ---
-    // progress = 0: Empezamos altos (Y=10), lejos (Z=26) y mirando un poco hacia abajo (X=-0.2)
-    // progress = 1: Aterrizamos en el centro (Y=0), más cerca (Z=16) y mirando recto (X=0)
-    const targetY = THREE.MathUtils.lerp(15, 0, progress);
-    const targetZ = THREE.MathUtils.lerp(26, 8, progress);
-    const targetRotX = THREE.MathUtils.lerp(-0.30, 0, progress);
+  useEffect(() => {
+    camera.position.set(0, 3.0, 15.5);
+    camera.lookAt(0, -1.6, 0);
+    camera.updateProjectionMatrix();
+  }, [camera]);
 
-    // Interpolación suave para que la cámara parezca flotar
-    state.camera.position.y = THREE.MathUtils.lerp(state.camera.position.y, targetY, 0.04);
-    state.camera.position.z = THREE.MathUtils.lerp(state.camera.position.z, targetZ, 0.04);
-    state.camera.rotation.x = THREE.MathUtils.lerp(state.camera.rotation.x, targetRotX, 0.04);
+  return null;
+}
 
-    // Ratón
-    if (hasMovedMouse.current) {
-      state.raycaster.setFromCamera(state.pointer, state.camera);
-      const hit = state.raycaster.ray.intersectPlane(invisiblePlane, rayTarget);
+function OrderedParticleSheet({
+  progress,
+  anchors,
+  position = [0, -3.1, 0],
+  rotation = [0, 0, 0],
+  scale = [1, 1, 1],
+  cols = 260,
+  rows = 150,
+  width = 22,
+  height = 12,
+  layer = 0,
+  opacity = 1,
+  pointScale = 1,
+  flowStrength = 0.18,
+  structureStrength = 0.78,
+  waveIntensity = 1,
+}: OrderedSheetProps) {
+  const groupRef = useRef<THREE.Group | null>(null);
+  const materialRef = useRef<THREE.ShaderMaterial | null>(null);
 
-      if (hit) {
-        targetMouse.set(rayTarget.x, rayTarget.y);
-      }
-    }
-    smoothMouse.lerp(targetMouse, 0.08);
+  const { camera, size } = useThree();
 
-    // --- NUEVO SISTEMA DE RASTREO DE TEXTOS (BULLETPROOF) ---
-    const getNDC = (anchor: { x: number; y: number }) => new THREE.Vector2(
-      anchor.x * 2 - 1,
-      -(anchor.y * 2 - 1)
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
+
+  const worldMouse = useMemo(() => new THREE.Vector3(1000, 1000, 0), []);
+  const localMouse = useMemo(() => new THREE.Vector3(1000, 1000, 0), []);
+
+  const worldTitle = useMemo(() => new THREE.Vector3(0, 0, 0), []);
+  const worldP2 = useMemo(() => new THREE.Vector3(0, 0, 0), []);
+  const worldP3 = useMemo(() => new THREE.Vector3(0, 0, 0), []);
+
+  const localTitle = useMemo(() => new THREE.Vector3(0, 0, 0), []);
+  const localP2 = useMemo(() => new THREE.Vector3(0, 0, 0), []);
+  const localP3 = useMemo(() => new THREE.Vector3(0, 0, 0), []);
+
+  const mouseTarget = useMemo(() => new THREE.Vector2(1000, 1000), []);
+  const smoothMouse = useMemo(() => new THREE.Vector2(1000, 1000), []);
+
+  const geometry = useMemo(
+    () => createGridGeometry(cols, rows, width, height),
+    [cols, rows, width, height]
+  );
+
+  const uniforms = useMemo(
+    () => ({
+      uTime: { value: 0 },
+      uProgress: { value: progress },
+      uLayer: { value: layer },
+      uOpacity: { value: opacity },
+      uPointScale: { value: pointScale },
+      uFlowStrength: { value: flowStrength },
+      uStructureStrength: { value: structureStrength },
+      uWaveIntensity: { value: waveIntensity },
+
+      uMouse: { value: new THREE.Vector2(1000, 1000) },
+
+      uTitle: { value: new THREE.Vector2(0, 0) },
+      uTitleStrength: { value: 0 },
+
+      uP2: { value: new THREE.Vector2(0, 0) },
+      uP2Strength: { value: 0 },
+
+      uP3: { value: new THREE.Vector2(0, 0) },
+      uP3Strength: { value: 0 },
+    }),
+    [layer, opacity, pointScale, flowStrength, structureStrength, waveIntensity, progress]
+  );
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      mouseTarget.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouseTarget.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    };
+
+    window.addEventListener("pointermove", handlePointerMove, { passive: true });
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+    };
+  }, [mouseTarget]);
+
+  const screenToWorldOnPlane = (
+    normalized: { x: number; y: number },
+    target: THREE.Vector3
+  ) => {
+    const ndc = new THREE.Vector2(
+      normalized.x * 2 - 1,
+      -(normalized.y * 2 - 1)
     );
 
-    const updateTextPosition = (ndc: THREE.Vector2, target: THREE.Vector2) => {
-      textRaycaster.setFromCamera(ndc, state.camera);
-      textRaycaster.ray.intersectPlane(invisiblePlane, tempVec3);
-      target.set(tempVec3.x, tempVec3.y);
-    };
+    raycaster.setFromCamera(ndc, camera);
+    raycaster.ray.intersectPlane(plane, target);
 
-    // Al usar raycaster, no importa dónde vuele la cámara, los agujeros siempre encajarán
-    updateTextPosition(getNDC(anchors.title), titleWorld);
-    updateTextPosition(getNDC(anchors.p2), p2World);
-    updateTextPosition(getNDC(anchors.p3), p3World);
+    return target;
+  };
 
-    // Fuerzas
-    const titleStrength = THREE.MathUtils.smoothstep(progress, 0.01, 0.16) * 3.8;
-    const p2Strength = THREE.MathUtils.smoothstep(progress, 0.20, 0.40) * 2.0; 
-    const p3Strength = THREE.MathUtils.smoothstep(progress, 0.42, 0.62) * 1.5; 
+  useFrame((state) => {
+    const material = materialRef.current;
+    const group = groupRef.current;
+    if (!material || !group) return;
 
-    const updateUniforms = (material: THREE.ShaderMaterial | null) => {
-      if (material) {
-        material.uniforms.uTime.value = time;
-        material.uniforms.uMouse.value.copy(smoothMouse);
-        
-        material.uniforms.uTitle.value.copy(titleWorld);
-        material.uniforms.uP2.value.copy(p2World);
-        material.uniforms.uP3.value.copy(p3World);
-        
-        material.uniforms.uTitleStrength.value = titleStrength;
-        material.uniforms.uP2Strength.value = p2Strength;
-        material.uniforms.uP3Strength.value = p3Strength;
-      }
-    };
+    const time = state.clock.elapsedTime;
 
-    updateUniforms(baseMaterialRef.current);
-    updateUniforms(glintMaterialRef.current);
-    updateUniforms(mistMaterialRef.current);
+    smoothMouse.lerp(mouseTarget, 0.06);
+
+    raycaster.setFromCamera(smoothMouse, camera);
+    raycaster.ray.intersectPlane(plane, worldMouse);
+
+    localMouse.copy(worldMouse);
+    group.worldToLocal(localMouse);
+
+    screenToWorldOnPlane(anchors.title, worldTitle);
+    screenToWorldOnPlane(anchors.p2, worldP2);
+    screenToWorldOnPlane(anchors.p3, worldP3);
+
+    localTitle.copy(worldTitle);
+    localP2.copy(worldP2);
+    localP3.copy(worldP3);
+
+    group.worldToLocal(localTitle);
+    group.worldToLocal(localP2);
+    group.worldToLocal(localP3);
+
+    const titleStrength = 1.0 * (1.0 - range(progress, 0.22, 0.44));
+    const p2Strength = range(progress, 0.16, 0.36) * (1.0 - range(progress, 0.52, 0.74));
+    const p3Strength = range(progress, 0.38, 0.60) * (1.0 - range(progress, 0.72, 0.94));
+
+    material.uniforms.uTime.value = time;
+    material.uniforms.uProgress.value = progress;
+
+    material.uniforms.uMouse.value.set(localMouse.x, localMouse.y);
+
+    material.uniforms.uTitle.value.set(localTitle.x, localTitle.y);
+    material.uniforms.uP2.value.set(localP2.x, localP2.y);
+    material.uniforms.uP3.value.set(localP3.x, localP3.y);
+
+    material.uniforms.uTitleStrength.value = titleStrength;
+    material.uniforms.uP2Strength.value = p2Strength;
+    material.uniforms.uP3Strength.value = p3Strength;
+
+    material.uniforms.uOpacity.value = opacity;
+    material.uniforms.uPointScale.value = pointScale;
+    material.uniforms.uFlowStrength.value = flowStrength;
+    material.uniforms.uStructureStrength.value = structureStrength;
+    material.uniforms.uWaveIntensity.value = waveIntensity;
   });
 
-  const getUniforms = (layerValue: number) => ({
-    uTime: { value: 0 },
-    uMouse: { value: new THREE.Vector2(1000, 1000) },
-    uLayer: { value: layerValue },
-    uTitle: { value: new THREE.Vector2(0, 0) },
-    uTitleStrength: { value: 0 },
-    uP2: { value: new THREE.Vector2(0, 0) },
-    uP2Strength: { value: 0 },
-    uP3: { value: new THREE.Vector2(0, 0) },
-    uP3Strength: { value: 0 },
-  });
+  useEffect(() => {
+    return () => {
+      geometry.dispose();
+      materialRef.current?.dispose();
+    };
+  }, [geometry]);
+
+  return (
+    <group ref={groupRef} position={position} rotation={rotation} scale={scale}>
+      <points geometry={geometry} frustumCulled={false}>
+        <shaderMaterial
+          ref={materialRef}
+          vertexShader={vertexShader}
+          fragmentShader={fragmentShader}
+          uniforms={uniforms}
+          transparent
+          depthWrite={false}
+          depthTest
+          blending={THREE.AdditiveBlending}
+        />
+      </points>
+    </group>
+  );
+}
+
+function OrderedParticleField({ progress = 0, anchors }: IntroFlowFieldProps) {
+  const safeAnchors = anchors ?? {
+    title: { x: 0.5, y: 0.28 },
+    p2: { x: 0.5, y: 0.5 },
+    p3: { x: 0.5, y: 0.7 },
+  };
 
   return (
     <>
-      <points geometry={geometry} frustumCulled={false}>
-        <shaderMaterial
-          ref={baseMaterialRef}
-          vertexShader={vertexShader}
-          fragmentShader={baseFragmentShader}
-          transparent
-          depthWrite={false}
-          blending={THREE.NormalBlending}
-          uniforms={getUniforms(0)}
-        />
-      </points>
+      <CameraRig />
 
-      <points geometry={geometry} frustumCulled={false}>
-        <shaderMaterial
-          ref={glintMaterialRef}
-          vertexShader={vertexShader}
-          fragmentShader={glintFragmentShader}
-          transparent
-          depthWrite={false}
-          blending={THREE.AdditiveBlending}
-          uniforms={getUniforms(1)}
-        />
-      </points>
+      {/* Main lower membrane */}
+      <OrderedParticleSheet
+        progress={progress}
+        anchors={safeAnchors}
+        position={[0, -4.35, -0.6]}
+        rotation={[-0.12, 0, 0]}
+        scale={[1.15, 1, 1]}
+        cols={270}
+        rows={145}
+        width={23}
+        height={12.5}
+        layer={0}
+        opacity={1.0}
+        pointScale={1.18}
+        flowStrength={0.13}
+        structureStrength={0.84}
+        waveIntensity={1.0}
+      />
 
-      <points geometry={geometry} frustumCulled={false}>
-        <shaderMaterial
-          ref={mistMaterialRef}
-          vertexShader={vertexShader}
-          fragmentShader={mistFragmentShader}
-          transparent
-          depthWrite={false}
-          blending={THREE.NormalBlending}
-          uniforms={getUniforms(1.18)}
-        />
-      </points>
+      {/* Right/back large membrane */}
+      <OrderedParticleSheet
+        progress={progress}
+        anchors={safeAnchors}
+        position={[4.8, -2.4, -4.2]}
+        rotation={[-0.22, -0.38, 0.15]}
+        scale={[1.05, 1.18, 1]}
+        cols={230}
+        rows={135}
+        width={19}
+        height={12}
+        layer={0.55}
+        opacity={0.72}
+        pointScale={0.92}
+        flowStrength={0.10}
+        structureStrength={0.88}
+        waveIntensity={0.82}
+      />
+
+      {/* Left foreground mound */}
+      <OrderedParticleSheet
+        progress={progress}
+        anchors={safeAnchors}
+        position={[-5.7, -5.2, 1.8]}
+        rotation={[-0.08, 0.28, -0.08]}
+        scale={[0.72, 0.82, 1]}
+        cols={150}
+        rows={105}
+        width={13}
+        height={8.5}
+        layer={0.15}
+        opacity={0.86}
+        pointScale={1.45}
+        flowStrength={0.10}
+        structureStrength={0.88}
+        waveIntensity={1.18}
+      />
+
+      {/* Background veil */}
+      <OrderedParticleSheet
+        progress={progress}
+        anchors={safeAnchors}
+        position={[-1.2, -1.4, -7.4]}
+        rotation={[-0.28, 0.18, -0.05]}
+        scale={[1.25, 1.05, 1]}
+        cols={190}
+        rows={110}
+        width={18}
+        height={10}
+        layer={0.95}
+        opacity={0.34}
+        pointScale={0.72}
+        flowStrength={0.08}
+        structureStrength={0.92}
+        waveIntensity={0.68}
+      />
     </>
   );
 }
@@ -520,26 +672,31 @@ export default function IntroFlowField({
       }}
     >
       <Canvas
-        dpr={[1, 1.5]} // Limitamos el pixel ratio a 1.5 para proteger el rendimiento en pantallas Retina/4K
-        gl={{ antialias: false, alpha: true, powerPreference: "high-performance" }}
-        camera={{ position: [0, 10, 26], fov: 45 }}
+        dpr={[1, 1.5]}
+        gl={{
+          antialias: false,
+          alpha: true,
+          powerPreference: "high-performance",
+        }}
+        camera={{
+          position: [0, 3.0, 15.5],
+          fov: 38,
+          near: 0.1,
+          far: 60,
+        }}
       >
-        <fog attach="fog" args={["#020611", 12, 28]} />
-        <SeaParticles progress={progress} anchors={anchors} />
-        
-        {/* MAGIA CINEMATOGRÁFICA */}
-        {/* disableNormalPass ahorra recursos, alpha mantiene el fondo transparente */}
-        <EffectComposer disableNormalPass alpha>
-          {/* luminanceThreshold: 0.2 hace que solo brillen las zonas medias/claras, no el fondo oscuro */}
-          {/* mipmapBlur: Clave para que el brillo se difumine como una lente de cámara real y no como un filtro barato */}
-          <Bloom 
-            luminanceThreshold={0.2} 
-            luminanceSmoothing={0.9} 
-            intensity={1.2} 
-            mipmapBlur 
+        <color attach="background" args={["#000000"]} />
+        <fog attach="fog" args={["#030712", 8, 25]} />
+
+        <OrderedParticleField progress={progress} anchors={anchors} />
+
+        <EffectComposer>
+          <Bloom
+            intensity={0.32}
+            luminanceThreshold={0.62}
+            luminanceSmoothing={0.42}
           />
-          {/* Oscurece los bordes para dar más inmersión */}
-          <Vignette eskil={false} offset={0.1} darkness={1.1} />
+          <Vignette eskil={false} offset={0.18} darkness={0.72} />
         </EffectComposer>
       </Canvas>
     </div>
