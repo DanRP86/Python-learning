@@ -65,9 +65,6 @@ varying float vGridU;
 varying float vGridV;
 varying float vOpacity;
 
-// -----------------------------
-// Simplex noise
-// -----------------------------
 vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
 vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
 vec4 permute(vec4 x) { return mod289(((x * 34.0) + 1.0) * x); }
@@ -160,9 +157,6 @@ float snoise(vec3 v) {
   );
 }
 
-// -----------------------------
-// Text field mask
-// -----------------------------
 float getPushField(vec2 pos, vec2 anchor, float width, float height) {
   vec2 delta = pos - anchor;
   vec2 norm = vec2(delta.x / width, delta.y / height);
@@ -177,9 +171,6 @@ void main() {
   float u = aGridU;
   float v = aGridV;
 
-  // ------------------------------------------------------
-  // Ordered membrane: mostly Z deformation, little XY drift
-  // ------------------------------------------------------
   float slowTime = uTime * 0.18;
 
   float waveA = sin(pos.x * 0.34 + slowTime * 1.4 + uLayer * 2.0) * 1.55;
@@ -189,7 +180,6 @@ void main() {
   float lowNoise = snoise(vec3(pos.x * 0.055, pos.y * 0.055, slowTime * 0.7)) * 2.2;
   float detail = snoise(vec3(pos.x * 0.16, pos.y * 0.13, slowTime * 1.1)) * 0.38;
 
-  // Ridge creates those textile-like folds
   float ridgeLine = sin(pos.x * 0.22 + pos.y * 0.16 + slowTime * 1.4);
   float ridge = smoothstep(0.30, 1.0, ridgeLine);
 
@@ -198,20 +188,15 @@ void main() {
 
   pos.z += surface;
 
-  // Very controlled lateral motion to keep grid readable
   float driftX = snoise(vec3(pos.x * 0.045, pos.y * 0.060, uTime * 0.05));
   float driftY = snoise(vec3(pos.y * 0.045, pos.x * 0.060, uTime * 0.05 + 20.0));
 
   pos.x += driftX * uFlowStrength;
   pos.y += driftY * uFlowStrength * 0.65;
 
-  // Keep ordered structure visible
   vec3 structured = original + vec3(0.0, 0.0, surface);
   pos = mix(pos, structured, uStructureStrength);
 
-  // ------------------------------------------------------
-  // Mouse interaction — subtle surface disturbance
-  // ------------------------------------------------------
   vec2 mouseDelta = pos.xy - uMouse;
   float mouseDist = length(mouseDelta);
   float mouseForce = 1.0 - smoothstep(0.0, 1.2, mouseDist);
@@ -220,9 +205,6 @@ void main() {
   pos.xy += mouseDir * mouseForce * 0.12;
   pos.z -= mouseForce * 0.28;
 
-  // ------------------------------------------------------
-  // Text repulsion — depress/open the surface, do not explode it
-  // ------------------------------------------------------
   float pushTitle = getPushField(pos.xy, uTitle, 11.5, 3.2);
   float pushP2 = getPushField(pos.xy, uP2, 9.0, 2.2);
   float pushP3 = getPushField(pos.xy, uP3, 7.0, 1.8);
@@ -237,17 +219,12 @@ void main() {
   vec2 p2Dir = normalize((pos.xy - uP2) + vec2(0.0001));
   vec2 p3Dir = normalize((pos.xy - uP3) + vec2(0.0001));
 
-  // Minimal lateral opening
   pos.xy += titleDir * maskTitle * 0.42;
   pos.xy += p2Dir * maskP2 * 0.34;
   pos.xy += p3Dir * maskP3 * 0.30;
 
-  // Main effect: surface depression around text
   pos.z -= totalMask * (2.4 + uLayer * 0.8);
 
-  // ------------------------------------------------------
-  // Varyings
-  // ------------------------------------------------------
   float crest = clamp((surface + 4.0) / 8.0, 0.0, 1.0);
   crest = max(crest, ridge * 0.85);
 
@@ -263,7 +240,6 @@ void main() {
 
   vDepth = clamp((-mvPosition.z - 6.0) / 18.0, 0.0, 1.0);
 
-  // Larger points in foreground, smaller in depth
   float baseSize = mix(1.6, 3.4, aRandom);
   float crestBoost = 1.0 + smoothstep(0.66, 1.0, crest) * 0.85;
   float depthScale = 18.0 / -mvPosition.z;
@@ -302,7 +278,6 @@ void main() {
   float crestLight = smoothstep(0.58, 1.0, vCrest);
   float rarity = smoothstep(0.55, 0.98, vRandom);
 
-  // Subtle diagonal shimmer, helps the ordered grid feel premium
   float diagonal = smoothstep(0.12, 1.0, vGridU * 0.55 + vGridV * 0.45);
   float sheen = crestLight * (0.55 + diagonal * 0.45);
 
@@ -315,10 +290,7 @@ void main() {
   float alpha = soft * (0.22 + vBand * 0.30 + crestLight * 0.52);
   alpha += core * crestLight * rarity * 0.20;
 
-  // Fade in depth slightly
   alpha *= mix(1.0, 0.58, vDepth);
-
-  // Text holes
   alpha *= (1.0 - vMask * 0.88);
 
   gl_FragColor = vec4(color, alpha * vOpacity);
@@ -334,7 +306,12 @@ function range(value: number, start: number, end: number) {
   return clamp01((value - start) / (end - start));
 }
 
-function createGridGeometry(cols: number, rows: number, width: number, height: number) {
+function createGridGeometry(
+  cols: number,
+  rows: number,
+  width: number,
+  height: number
+) {
   const count = cols * rows;
 
   const positions = new Float32Array(count * 3);
@@ -351,8 +328,6 @@ function createGridGeometry(cols: number, rows: number, width: number, height: n
       const u = x / (cols - 1);
       const v = y / (rows - 1);
 
-      // Ordered grid with tiny micro-jitter to avoid perfect CG stiffness.
-      // Keep this very small: reference depends on visible order.
       const jitter = 0.018;
       const jx = (Math.random() - 0.5) * jitter;
       const jy = (Math.random() - 0.5) * jitter;
@@ -362,10 +337,7 @@ function createGridGeometry(cols: number, rows: number, width: number, height: n
       positions[i3 + 2] = 0;
 
       randoms[i] = Math.random();
-
-      // Stronger presence toward lower/foreground bands
       bands[i] = Math.pow(v, 1.25);
-
       gridU[i] = u;
       gridV[i] = v;
 
@@ -375,6 +347,7 @@ function createGridGeometry(cols: number, rows: number, width: number, height: n
   }
 
   const geometry = new THREE.BufferGeometry();
+
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute("aRandom", new THREE.BufferAttribute(randoms, 1));
   geometry.setAttribute("aBand", new THREE.BufferAttribute(bands, 1));
@@ -389,7 +362,7 @@ function CameraRig() {
 
   useEffect(() => {
     camera.position.set(0, 3.0, 15.5);
-    camera.lookAt(0, -1.6, 0);
+    camera.lookAt(0, -1.8, -2.5);
     camera.updateProjectionMatrix();
   }, [camera]);
 
@@ -399,8 +372,8 @@ function CameraRig() {
 function OrderedParticleSheet({
   progress,
   anchors,
-  position = [0, -3.1, 0],
-  rotation = [0, 0, 0],
+  position = [0, -2.15, -2.2],
+  rotation = [-Math.PI / 2 - 0.1, 0, 0],
   scale = [1, 1, 1],
   cols = 260,
   rows = 150,
@@ -416,10 +389,15 @@ function OrderedParticleSheet({
   const groupRef = useRef<THREE.Group | null>(null);
   const materialRef = useRef<THREE.ShaderMaterial | null>(null);
 
-  const { camera, size } = useThree();
+  const { camera } = useThree();
 
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
-  const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
+
+  const sheetPlane = useMemo(() => new THREE.Plane(), []);
+  const sheetNormal = useMemo(() => new THREE.Vector3(), []);
+  const sheetWorldPosition = useMemo(() => new THREE.Vector3(), []);
+  const localNormal = useMemo(() => new THREE.Vector3(0, 0, 1), []);
+  const sheetQuaternion = useMemo(() => new THREE.Quaternion(), []);
 
   const worldMouse = useMemo(() => new THREE.Vector3(1000, 1000, 0), []);
   const localMouse = useMemo(() => new THREE.Vector3(1000, 1000, 0), []);
@@ -462,7 +440,15 @@ function OrderedParticleSheet({
       uP3: { value: new THREE.Vector2(0, 0) },
       uP3Strength: { value: 0 },
     }),
-    [layer, opacity, pointScale, flowStrength, structureStrength, waveIntensity, progress]
+    [
+      layer,
+      opacity,
+      pointScale,
+      flowStrength,
+      structureStrength,
+      waveIntensity,
+      progress,
+    ]
   );
 
   useEffect(() => {
@@ -471,24 +457,44 @@ function OrderedParticleSheet({
       mouseTarget.y = -(event.clientY / window.innerHeight) * 2 + 1;
     };
 
-    window.addEventListener("pointermove", handlePointerMove, { passive: true });
+    window.addEventListener("pointermove", handlePointerMove, {
+      passive: true,
+    });
 
     return () => {
       window.removeEventListener("pointermove", handlePointerMove);
     };
   }, [mouseTarget]);
 
-  const screenToWorldOnPlane = (
+  const updateSheetPlane = (group: THREE.Group) => {
+    group.getWorldPosition(sheetWorldPosition);
+    group.getWorldQuaternion(sheetQuaternion);
+
+    sheetNormal.copy(localNormal);
+    sheetNormal.applyQuaternion(sheetQuaternion);
+    sheetNormal.normalize();
+
+    sheetPlane.setFromNormalAndCoplanarPoint(sheetNormal, sheetWorldPosition);
+  };
+
+  const screenToWorldOnSheetPlane = (
     normalized: { x: number; y: number },
-    target: THREE.Vector3
+    target: THREE.Vector3,
+    group: THREE.Group
   ) => {
+    updateSheetPlane(group);
+
     const ndc = new THREE.Vector2(
       normalized.x * 2 - 1,
       -(normalized.y * 2 - 1)
     );
 
     raycaster.setFromCamera(ndc, camera);
-    raycaster.ray.intersectPlane(plane, target);
+    const hit = raycaster.ray.intersectPlane(sheetPlane, target);
+
+    if (!hit) {
+      target.set(0, 0, 0);
+    }
 
     return target;
   };
@@ -496,21 +502,28 @@ function OrderedParticleSheet({
   useFrame((state) => {
     const material = materialRef.current;
     const group = groupRef.current;
+
     if (!material || !group) return;
 
     const time = state.clock.elapsedTime;
 
     smoothMouse.lerp(mouseTarget, 0.06);
 
+    updateSheetPlane(group);
+
     raycaster.setFromCamera(smoothMouse, camera);
-    raycaster.ray.intersectPlane(plane, worldMouse);
+
+    const mouseHit = raycaster.ray.intersectPlane(sheetPlane, worldMouse);
+    if (!mouseHit) {
+      worldMouse.set(1000, 1000, 0);
+    }
 
     localMouse.copy(worldMouse);
     group.worldToLocal(localMouse);
 
-    screenToWorldOnPlane(anchors.title, worldTitle);
-    screenToWorldOnPlane(anchors.p2, worldP2);
-    screenToWorldOnPlane(anchors.p3, worldP3);
+    screenToWorldOnSheetPlane(anchors.title, worldTitle, group);
+    screenToWorldOnSheetPlane(anchors.p2, worldP2, group);
+    screenToWorldOnSheetPlane(anchors.p3, worldP3, group);
 
     localTitle.copy(worldTitle);
     localP2.copy(worldP2);
@@ -521,8 +534,10 @@ function OrderedParticleSheet({
     group.worldToLocal(localP3);
 
     const titleStrength = 1.0 * (1.0 - range(progress, 0.22, 0.44));
-    const p2Strength = range(progress, 0.16, 0.36) * (1.0 - range(progress, 0.52, 0.74));
-    const p3Strength = range(progress, 0.38, 0.60) * (1.0 - range(progress, 0.72, 0.94));
+    const p2Strength =
+      range(progress, 0.16, 0.36) * (1.0 - range(progress, 0.52, 0.74));
+    const p3Strength =
+      range(progress, 0.38, 0.6) * (1.0 - range(progress, 0.72, 0.94));
 
     material.uniforms.uTime.value = time;
     material.uniforms.uProgress.value = progress;
@@ -580,13 +595,12 @@ function OrderedParticleField({ progress = 0, anchors }: IntroFlowFieldProps) {
     <>
       <CameraRig />
 
-      {/* Main lower membrane */}
       <OrderedParticleSheet
         progress={progress}
         anchors={safeAnchors}
-        position={[0, -4.35, -0.6]}
-        rotation={[-0.12, 0, 0]}
-        scale={[1.15, 1, 1]}
+        position={[0, -2.15, -2.2]}
+        rotation={[-Math.PI / 2 - 0.1, 0, 0]}
+        scale={[1.18, 1, 1]}
         cols={270}
         rows={145}
         width={23}
@@ -599,13 +613,12 @@ function OrderedParticleField({ progress = 0, anchors }: IntroFlowFieldProps) {
         waveIntensity={1.0}
       />
 
-      {/* Right/back large membrane */}
       <OrderedParticleSheet
         progress={progress}
         anchors={safeAnchors}
-        position={[4.8, -2.4, -4.2]}
-        rotation={[-0.22, -0.38, 0.15]}
-        scale={[1.05, 1.18, 1]}
+        position={[4.8, -1.25, -6.1]}
+        rotation={[-Math.PI / 2 - 0.16, -0.26, 0.12]}
+        scale={[1.08, 1.2, 1]}
         cols={230}
         rows={135}
         width={19}
@@ -613,17 +626,16 @@ function OrderedParticleField({ progress = 0, anchors }: IntroFlowFieldProps) {
         layer={0.55}
         opacity={0.72}
         pointScale={0.92}
-        flowStrength={0.10}
+        flowStrength={0.1}
         structureStrength={0.88}
         waveIntensity={0.82}
       />
 
-      {/* Left foreground mound */}
       <OrderedParticleSheet
         progress={progress}
         anchors={safeAnchors}
-        position={[-5.7, -5.2, 1.8]}
-        rotation={[-0.08, 0.28, -0.08]}
+        position={[-5.7, -1.55, 0.2]}
+        rotation={[-Math.PI / 2 - 0.08, 0.24, -0.08]}
         scale={[0.72, 0.82, 1]}
         cols={150}
         rows={105}
@@ -632,17 +644,16 @@ function OrderedParticleField({ progress = 0, anchors }: IntroFlowFieldProps) {
         layer={0.15}
         opacity={0.86}
         pointScale={1.45}
-        flowStrength={0.10}
+        flowStrength={0.1}
         structureStrength={0.88}
         waveIntensity={1.18}
       />
 
-      {/* Background veil */}
       <OrderedParticleSheet
         progress={progress}
         anchors={safeAnchors}
-        position={[-1.2, -1.4, -7.4]}
-        rotation={[-0.28, 0.18, -0.05]}
+        position={[-1.2, -0.75, -8.4]}
+        rotation={[-Math.PI / 2 - 0.24, 0.15, -0.05]}
         scale={[1.25, 1.05, 1]}
         cols={190}
         rows={110}
